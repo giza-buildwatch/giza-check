@@ -1,0 +1,19 @@
+name: Nonexistent-target control
+on:
+  push:
+    branches: ['control/**']
+permissions:
+  contents: read
+  actions: read
+  deployments: read
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node control/run-control.mjs
