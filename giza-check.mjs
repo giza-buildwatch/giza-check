@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Giza check, version 1. Source: https://github.com/giza-buildwatch/giza-check · More: the Giza BuildWatch page.
+// Giza check (see "Let your AI check itself" on the Giza page). Version 1.
 // "Make my pyramid": plug and play for outsiders. Paste a public GitHub link and a web address
 // (or let your own AI fill in a short report); Giza checks what it can see itself and colors the
 // starter pyramid from that evidence. No AI, no account, no server: the browser reads public GitHub
@@ -116,7 +116,7 @@ website: <the live web address, or none>
 master: <is all the code saved in GitHub?> | evidence:
 checkself: <is there a /health or status page that shows the version?> | evidence:
 nokeys: <are ALL passwords and keys kept out of the code, in the host's settings?> | evidence:
-signup: <can a stranger sign up, log in and reset a password? say if it is invitation-only on purpose> | evidence:
+signup: <can people get an account, log in and reset a password? If it is invitation-only on purpose, answer for invited people and start the evidence with "invite-only"> | evidence:
 payments: <can the app take a real payment? yes = live payments work; partly = test mode only> | evidence:
 backup: <is the data backed up automatically?> | evidence:
 running: <does it restart by itself and alert someone if it goes down?> | evidence:`;
@@ -145,12 +145,20 @@ function parseReport(text) {
       const w = ans.trim().toLowerCase().match(/^[^a-z]*(yes|partly|partial|no|nope|not yet|unsure|unknown)\b/)?.[1];
       const a = !w ? 'unsure' : w === 'partial' ? 'partly' : /^(nope|not yet)$/.test(w) ? 'no' : w === 'unknown' ? 'unsure' : w;
       out.claims[k] = {answer: a, evidence: scrubSecret(ev.join('|').replace(/^\s*evidence\s*:\s*/i, '').trim()).slice(0, 200)};
+      // Invitation-only on purpose is a design, not a gap: the block then asks whether INVITED people can get in.
+      // ("no, it's invite-only" answers the old open-sign-up question, so it says nothing about invitations: unsure.)
+      if (k === 'signup' && /invit/i.test(v)) { out.claims[k].inviteOnly = true; if (a === 'no') out.claims[k].answer = 'unsure'; }
     }
   }
   return Object.keys(out.claims).length || out.name || out.github || out.website ? out : null;
 }
 
 // ---- turning facts into blocks ----
+// A file or folder about invitations (accept-invite page, invitations route...) means the app lets people in by invitation.
+const INVITE = /(^|\/)[^/]*invit[^/]*(\/|$)/i;
+// An open sign-up page (signup, sign-up, register) means anyone can join, even if the app also sends invitations.
+const SIGNUP_PAGE = /(^|\/)[^/]*(sign[-_]?up|register)[^/]*(\/|$)/i;
+const inviteFile = p => INVITE.test(p) && !/(^|\/)(node_modules|vendor|\.venv|venv|docs?)\//i.test(p) && !/\.(md|txt|png|jpe?g|svg|gif)$/i.test(p);
 const days = (iso, now) => iso && !Number.isNaN(Date.parse(iso)) ? Math.floor((now - Date.parse(iso)) / 86_400_000) : null;
 
 function evaluate(facts, {name, id, repoText, siteText, claims, repoFromAI}, now = Date.now()) {
@@ -165,6 +173,8 @@ function evaluate(facts, {name, id, repoText, siteText, claims, repoFromAI}, now
   const age = days(R?.pushedAt, now);
   const notSeen = partial ? 'Not checked: the repo is too big for Giza to read fully from here.' : 'Not checked: Giza cannot see your code from here.';
   const keyFiles = tree.filter(isSecretFile);
+  // Invitation-only: the AI says so, or the code has an invitation step and no open sign-up page.
+  const invite = !!claims?.signup?.inviteOnly || (seen && tree.some(inviteFile) && !tree.some(p => SIGNUP_PAGE.test(p) && !/(^|\/)(node_modules|vendor)\//.test(p)));
   const repoWhy = !R ? 'No GitHub link given.'
     : !repoOk ? (R.status === 403 || R.status === 429 ? 'GitHub is limiting checks from this browser right now. Try "Check again" in an hour.'
       : R.status === 404 ? 'Giza could not see that repo. It may be private (Giza can only read public repos) or the link may be wrong.'
@@ -179,12 +189,12 @@ function evaluate(facts, {name, id, repoText, siteText, claims, repoFromAI}, now
       repoOk && !R.empty ? (age !== null && age > 30 ? 'Nothing changed in 30 days: is this still the real copy?' : 'Make sure every change goes here, and that your host deploys from it.') : 'Ask your AI to put the whole project in GitHub.'),
     B('looks', 'It looks finished', 'foundation',
       facts.site === 'answers' ? 'claimed' : 'unknown',
-      facts.site === 'answers' ? 'Something answers at your web address. Giza cannot see the page itself from here, so this is not proof it is your app.'
+      facts.site === 'answers' ? 'Something answered at your web address, but Giza cannot see what. Even a "page not found" would count here, so this is not proof it is your app.'
         : facts.site === 'no-answer' ? 'Giza could not reach your web address. It may be down, or your browser may have blocked the check. Open it on your phone.' : 'No web address given.',
       'Open it on your phone and click through every screen.'),
     B('live', 'People can reach it', 'foundation',
       facts.site === 'answers' ? 'claimed' : 'unknown',
-      facts.site === 'answers' ? 'Something answers at the address. Proof is you opening it on a phone on cellular data and seeing your app (and its version on a /health page).'
+      facts.site === 'answers' ? 'Something answered at the address, but Giza cannot see what (even a "page not found" would count). Proof is you opening it on a phone on cellular data and seeing your app (and its version on a /health page).'
         : facts.site === 'no-answer' ? 'Giza could not reach the address (down, wrong, or the check was blocked by your browser).' : 'No web address given.',
       'Open it on your phone on cellular data, not just on your computer.', ['master']),
     B('checkself', 'You can check it\'s working', 'observability',
@@ -197,7 +207,13 @@ function evaluate(facts, {name, id, repoText, siteText, claims, repoFromAI}, now
       keyFiles.length ? `A file that usually holds passwords is in the repo: ${keyFiles.slice(0, 3).join(', ')}.`
         : !seen ? notSeen : 'No password files (.env and similar) in the repo. Keys typed inside the code itself were not checked.',
       keyFiles.length ? 'Remove the file, change every key it held, and keep keys in the host\'s settings.' : 'Ask your AI to search the code for keys and move any to the host\'s settings.', ['master']),
-    B('signup', 'People can sign up', 'execution',
+    invite ? B('signup', 'Invited people can get in', 'execution',
+      seen && (uses(pkgs, AUTH_NPM, AUTH_PY, AUTH_RB) || tree.some(inviteFile)) ? 'claimed' : seen && !facts.depsUnread ? 'planned' : 'unknown',
+      'Your app lets people in by invitation, so Giza checks the invitation instead of open sign-up. '
+        + (seen && tree.some(inviteFile) ? 'An invitation step was found in the code. ' : '') + (seen && uses(pkgs, AUTH_NPM, AUTH_PY, AUTH_RB) ? 'A standard log-in service is installed. ' : '')
+        + 'Proof is a new person accepting an invitation in a private window.',
+      'Send an invitation to a new email, accept it in a private window, then log out and back in.', ['live', 'nokeys'])
+    : B('signup', 'People can sign up', 'execution',
       seen && uses(pkgs, AUTH_NPM, AUTH_PY, AUTH_RB) ? 'claimed' : seen && !facts.depsUnread ? 'planned' : 'unknown',
       seen && uses(pkgs, AUTH_NPM, AUTH_PY, AUTH_RB) ? 'A standard log-in service is installed. Proof is a stranger signing up in a private window.'
         : seen && !facts.depsUnread ? 'No standard log-in service found in the code.' : seen ? 'Giza could not read the project\'s package list.' : notSeen,
@@ -229,6 +245,7 @@ function evaluate(facts, {name, id, repoText, siteText, claims, repoFromAI}, now
     else if (c.answer === 'no' || c.answer === 'partly') b.purpose += ` Your AI says ${c.answer === 'no' ? 'not yet' : 'partly'}${said}.`;
     else if (b.state === 'unknown') b.purpose += ` Your AI is unsure${said}.`;
   }
+  if (invite) blocks.find(b => b.id === `${id}-signup`).lesson = 'app-signup-invite';
   if (repoFromAI && blocks[0].state === 'claimed') blocks[0].purpose += ' (This link came from your AI\'s report.)';
   return {id, name: scrubSecret(name || (repoText ? String(repoText).split('/').pop() : 'My build')).slice(0, 60),
     subtitle: `Your build · checked ${localDay(facts.checkedAt)} from public evidence`, checkedAt: facts.checkedAt,
@@ -238,14 +255,23 @@ function evaluate(facts, {name, id, repoText, siteText, claims, repoFromAI}, now
 // ---- Connect GitHub: evidence read with the visitor's own permission (ownership proven by GitHub) ----
 // The connect service hands over, per repo: meta, file list, package lists, the latest finished run of each
 // workflow, and production deployments reported by the host. Here, and only here, blocks can turn green.
+// Which reported deploy is the live one. GitHub lists newest first, and one repo can report several kinds
+// (a backend with no address, a GitHub Pages site, a Vercel preview). Prefer a production deploy
+// that succeeded and gave an https address; never let an address-less one hide a good one.
+function pickProd(deployments = []) {
+  const ok = u => /^https:\/\/[^\s]+$/.test(u ?? '');
+  const prod = (deployments ?? []).filter(d => /prod|github-pages/i.test(String(d.environment ?? '')) && !/preview/i.test(String(d.environment ?? '')))
+    .map(d => ({...d, url: ok(d.url) ? d.url : null}));
+  return prod.find(d => d.state === 'success' && d.url) ?? prod.find(d => d.url) ?? prod.find(d => d.state) ?? null;
+}
+
 function evaluateConnected(ev, {id, checkedAt, user, siteAnswers = null}, now = Date.now()) {
   const hours = iso => iso && !Number.isNaN(Date.parse(iso)) ? (now - Date.parse(iso)) / 3_600_000 : null;
   // The service sends summaries, not file lists: rebuild just enough of a file list for the shared rules.
   const tree = ev.seen === false ? null : [...(ev.secretFiles ?? []).map(String), ...(ev.has?.health ? ['api/health.ts'] : []),
-    ...(ev.has?.backup ? ['scripts/backup.sh'] : []), ...(ev.has?.monitor ? ['.github/workflows/monitor.yml'] : [])];
+    ...(ev.has?.backup ? ['scripts/backup.sh'] : []), ...(ev.has?.monitor ? ['.github/workflows/monitor.yml'] : []), ...(ev.has?.invite ? ['app/invite/page.tsx'] : []), ...(ev.has?.signupPage ? ['app/signup/page.tsx'] : [])];
   const packages = (ev.packages ?? []).map(String);
-  const prod = (ev.deployments ?? []).find(d => /prod|github-pages/i.test(d.environment) && d.state) ?? null;
-  if (prod && !/^https:\/\/[^\s]+$/.test(prod.url ?? '')) prod.url = null;
+  const prod = pickProd(ev.deployments);
   const facts = {checkedAt: checkedAt ?? new Date(now).toISOString(), repo: {found: true, pushedAt: ev.pushedAt, branch: ev.branch, url: /^https:\/\/github\.com\//.test(ev.url ?? '') ? ev.url : null,
     fork: ev.fork, archived: ev.archived, owner: user, empty: ev.empty}, tree, truncated: !!ev.truncated, packages, depsUnread: !!ev.depsUnread,
     site: prod?.url ? (siteAnswers === false ? 'no-answer' : 'answers') : null, siteUrl: prod?.url ?? null};
@@ -265,6 +291,7 @@ function evaluateConnected(ev, {id, checkedAt, user, siteAnswers = null}, now = 
     const h = hours(prod.at);
     if (prod.state === 'success' && prod.url && siteAnswers === true && h <= 24 * 30)
       set('live', 'verified', `Your host reported to GitHub a successful production deploy ${age(h)} to ${prod.url}, and the address answers. (Reported by your host, not checked page by page.)`, {evidence: [{label: 'Production address', url: prod.url}]});
+    else if (prod.state === 'success' && !prod.url) Object.assign(B('live'), {purpose: `Your host reported a successful production deploy ${age(h)}, but did not tell GitHub its web address, so Giza cannot check that it answers.`});
     else if (prod.state === 'failure' || prod.state === 'error') set('live', 'broken', `Your host reported the latest production deploy ${prod.state === 'error' ? 'errored' : 'failed'} (${age(h)}).`);
   }
   // Workflow runs: green when the right check passed recently, red when its latest run failed.
@@ -274,7 +301,16 @@ function evaluateConnected(ev, {id, checkedAt, user, siteAnswers = null}, now = 
     else if (r.conclusion === 'success') set(k, 'claimed', `The "${r.name}" check last passed ${age(h)}: too long ago to count as proof. ${label}`);
     else set(k, 'broken', `The latest "${r.name}" check ${r.conclusion === 'timed_out' ? 'timed out' : 'failed'} (${age(h)}). ${label}`);
   };
+  byRun('signup', /sign.?up|log.?in|\bauth|invit/i, 24 * 7, 'Fix it, then it turns green on the next check.', B('signup').name === 'Invited people can get in' ? 'Invited people can get in.' : 'People can sign up and log in.');
   byRun('checkself', /health|smoke/i, 24, 'Fix it, then it turns green on the next check.', 'Your app answers a health check automatically.');
+  // Giza itself opened the app's health page at its production address (only after that address really answered).
+  // A version on it is proof Giza saw; a problem found elsewhere is never overruled.
+  const hp = ev.health, hpPath = ['/health', '/api/health', '/healthz'].includes(hp?.path) ? hp.path : null;
+  if (hpPath && siteAnswers === true && prod?.url && B('checkself').state !== 'broken') {
+    const ver = hp.version ? String(hp.version).replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 40) : '', link = [{label: 'Health page', url: new URL(prod.url).origin + hpPath}];
+    if (ver) set('checkself', 'verified', `Giza opened ${hpPath} at your web address just now and it answered, showing version ${ver}.`, {evidence: link});
+    else set('checkself', 'claimed', `Giza opened ${hpPath} at your web address and it answered, but it does not show which version is running. Ask your AI to add the version; then it turns green.`, {evidence: link});
+  }
   // A backup is only proof once a restore is: a check counts green only if its name says it restores.
   const bk = run(/backup|restore/i);
   if (bk && bk.conclusion === 'success' && !/restore/i.test(bk.name ?? '')) {
@@ -294,7 +330,7 @@ function frontier(blocks) {
   return blocks.filter(ready).sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9));
 }
 
-const lessons = {"app-looks":{"what":"The part you can see: screens, buttons, colors. An AI can build this in an hour, and it really does look finished.","cave":"This is the framed house: it looks almost done but is maybe a fifth of the job. Launching here means the first real users find empty walls.","tell":"Be honest with me: besides how it looks, what does a real app still need that this one does not have yet? List it in plain words.","check":"You can click through the screens. Everything else on this pyramid is still empty, and that is normal at this point."},"app-master":{"what":"GitHub is a safe home for your code: the one master copy that every AI and every host works from.","cave":"Code that only lives in chats gets lost or forked into versions that disagree. Then nobody knows which one is real.","tell":"Put my whole project in a GitHub repository and show me, one step at a time, where to see it. From now on, every change goes there first.","check":"You can open your project on github.com and see the files."},"app-live":{"what":"Putting your app on a host (like Render or Vercel) so it has a real web address that works for anyone, anytime.","cave":"A preview that only works on your screen is not an app. And a host that runs pasted code instead of your GitHub copy drifts out of date.","tell":"Deploy my app from GitHub to a host, explain each click like I have training wheels, and give me the address. Do not paste code into the host directly.","check":"The address opens on your phone, on cellular data, not just on your computer."},"app-checkself":{"what":"A simple page (often /health) that says \"I am running\" and which version. Your way to check without asking anyone.","cave":"Without it, \"it's working\" is just an AI's word. We once spent three days trusting \"deployment successful\" while old code was running.","tell":"Add a /health page that shows the version name. Before you ever tell me something is deployed, tell me which version name I should see there.","check":"Open your-address/health and see the version you expect."},"app-nokeys":{"what":"Keys and passwords (for payments, databases, AI services) belong in your host's private settings, never in code, chat or screenshots.","cave":"A key pasted into a chat or shown in a screenshot can be copied by anyone who sees it. Then you have to replace it everywhere.","tell":"Check my code for any passwords or keys and move them into the host's private settings. Never ask me to paste a key into this chat.","check":"Your AI confirms no keys are in the code, and the app still works using the host's settings."},"app-signup":{"what":"Real accounts: a stranger can create one, log in, log out and reset a forgotten password.","cave":"Log-in that only works for you, or saves passwords unsafely, is a disaster waiting for your first real user.","tell":"Add sign-up and log-in using a standard, well-known service, not homemade code. Then walk me through testing it as a stranger.","check":"In a private browser window, you sign up with a new email, log out, and log back in."},"app-payments":{"what":"Taking money through a payment company (like Stripe), first in test mode with fake cards, then for real.","cave":"Payment code that was never tested with real money fails at the worst moment, or charges people twice.","tell":"Set up payments in test mode first and show me a test purchase. Then help me make one real $1 payment and refund it.","check":"The $1 shows up in your payment company's dashboard, and the refund works."},"app-backup":{"what":"An automatic copy of your users' data kept somewhere else, plus one practice restore to prove the copy works.","cave":"GitHub saves your code, not your users' data. If the database is lost and you have never practiced a restore, the data is gone.","tell":"Set up automatic backups of my data, then restore one into a test copy so we know it works. Explain each step simply.","check":"A test copy of your app shows the same data as the live one after a restore."},"app-running":{"what":"Your app restarts by itself after a crash, and something outside it emails you if it stops answering.","cave":"Apps fail at 3 a.m. Without automatic restart and an alert, you find out from an angry customer days later.","tell":"Make my app restart automatically if it crashes, and set up a simple outside check that emails me if /health stops answering.","check":"You restart the app on purpose and it comes back by itself; a test alert reaches your email."}};
+const lessons = {"app-looks":{"what":"The part you can see: screens, buttons, colors. An AI can build this in an hour, and it really does look finished.","cave":"This is the framed house: it looks almost done but is maybe a fifth of the job. Launching here means the first real users find empty walls.","tell":"Be honest with me: besides how it looks, what does a real app still need that this one does not have yet? List it in plain words.","check":"You can click through the screens. Everything else on this pyramid is still empty, and that is normal at this point."},"app-master":{"what":"GitHub is a safe home for your code: the one master copy that every AI and every host works from.","cave":"Code that only lives in chats gets lost or forked into versions that disagree. Then nobody knows which one is real.","tell":"Put my whole project in a GitHub repository and show me, one step at a time, where to see it. From now on, every change goes there first.","check":"You can open your project on github.com and see the files."},"app-live":{"what":"Putting your app on a host (like Render or Vercel) so it has a real web address that works for anyone, anytime.","cave":"A preview that only works on your screen is not an app. And a host that runs pasted code instead of your GitHub copy drifts out of date.","tell":"Deploy my app from GitHub to a host, explain each click like I have training wheels, and give me the address. Do not paste code into the host directly.","check":"The address opens on your phone, on cellular data, not just on your computer."},"app-checkself":{"what":"A simple page (often /health) that says \"I am running\" and which version. Your way to check without asking anyone.","cave":"Without it, \"it's working\" is just an AI's word. We once spent three days trusting \"deployment successful\" while old code was running.","tell":"Add a /health page that shows the version name. Before you ever tell me something is deployed, tell me which version name I should see there.","check":"Open your-address/health and see the version you expect."},"app-nokeys":{"what":"Keys and passwords (for payments, databases, AI services) belong in your host's private settings, never in code, chat or screenshots.","cave":"A key pasted into a chat or shown in a screenshot can be copied by anyone who sees it. Then you have to replace it everywhere.","tell":"Check my code for any passwords or keys and move them into the host's private settings. Never ask me to paste a key into this chat.","check":"Your AI confirms no keys are in the code, and the app still works using the host's settings."},"app-signup":{"what":"Real accounts: a stranger can create one, log in, log out and reset a forgotten password.","cave":"Log-in that only works for you, or saves passwords unsafely, is a disaster waiting for your first real user.","tell":"Add sign-up and log-in using a standard, well-known service, not homemade code. Then walk me through testing it as a stranger.","check":"In a private browser window, you sign up with a new email, log out, and log back in."},"app-signup-invite":{"what":"Invitation-only on purpose: you choose who gets in. An invited person can accept, set a password, log in, log out and reset a forgotten password.","cave":"An invitation link that never expires, works twice, or lets someone in without one is an open door you think is locked.","tell":"My app is invitation-only. Walk me through sending an invite to a new email and accepting it as a stranger. Make sure invites expire, work only once, and nobody gets in without one.","check":"In a private browser window, a brand-new person accepts your invitation, logs out, and logs back in. Opening the sign-up page without an invitation does not let anyone in."},"app-payments":{"what":"Taking money through a payment company (like Stripe), first in test mode with fake cards, then for real.","cave":"Payment code that was never tested with real money fails at the worst moment, or charges people twice.","tell":"Set up payments in test mode first and show me a test purchase. Then help me make one real $1 payment and refund it.","check":"The $1 shows up in your payment company's dashboard, and the refund works."},"app-backup":{"what":"An automatic copy of your users' data kept somewhere else, plus one practice restore to prove the copy works.","cave":"GitHub saves your code, not your users' data. If the database is lost and you have never practiced a restore, the data is gone.","tell":"Set up automatic backups of my data, then restore one into a test copy so we know it works. Explain each step simply.","check":"A test copy of your app shows the same data as the live one after a restore."},"app-running":{"what":"Your app restarts by itself after a crash, and something outside it emails you if it stops answering.","cave":"Apps fail at 3 a.m. Without automatic restart and an alert, you find out from an angry customer days later.","tell":"Make my app restart automatically if it crashes, and set up a simple outside check that emails me if /health stops answering.","check":"You restart the app on purpose and it comes back by itself; a test alert reaches your email."}};
 // Giza check for AIs: run it on your own project before you tell your person anything is "done".
 //   node giza-check.mjs owner/repo            plain-text pyramid
 //   node giza-check.mjs owner/repo --json     the same, as JSON
@@ -383,6 +419,40 @@ async function probeSite(url, timeoutMs = 10000) {
   });
 }
 
+// Giza opens the app's own health page (/health, /api/health or /healthz) at its production address, the same safe
+// way as above, and keeps it only if it is a real health answer: 2xx, not a web page (apps that send every address
+// to their home page would otherwise "pass"), small, and showing a version. Returns {path, version} or null.
+const HEALTH_PATHS = ['/health', '/api/health', '/healthz'];
+function readHealth(status, type, body) {
+  if (status < 200 || status >= 300 || /html/i.test(type ?? '') || /^\s*</.test(body ?? '')) return null;
+  const text = String(body ?? '').slice(0, 4096);
+  let version = null;
+  try { const j = JSON.parse(text); for (const k of ['version', 'commit', 'sha', 'build', 'release', 'gitSha', 'git_sha']) { const v = j?.[k] ?? j?.app?.[k]; if (v !== undefined && v !== null && String(v).trim()) { version = String(v); break; } } } catch {}
+  version ??= text.match(/\b(?:version|commit|sha|build|release)\b["']?\s*[:=]\s*["']?([A-Za-z0-9][A-Za-z0-9._+-]{0,39})/i)?.[1] ?? null;
+  return {version: version === null ? null : version.replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 40) || null};
+}
+async function fetchHealth(site, timeoutMs = 6000) {
+  const https = await import('node:https'), dns = await import('node:dns');
+  const origin = new URL(site).origin;
+  for (const path of HEALTH_PATHS) {
+    const got = await new Promise(resolve => {
+      let done = false; const finish = v => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
+      const timer = setTimeout(() => { req.destroy(); finish(null); }, timeoutMs + 2000);
+      const req = https.request(origin + path, {method: 'GET', lookup: guardedLookup(dns.lookup), timeout: timeoutMs, headers: {'user-agent': 'giza-check', accept: 'application/json, text/plain'}}, res => {
+        const parts = []; let n = 0;
+        res.on('data', d => { parts.push(d); n += d.length; if (n > 4096) { req.destroy(); finish(readHealth(res.statusCode, res.headers['content-type'], Buffer.concat(parts).subarray(0, 4096).toString('utf8'))); } });
+        res.on('end', () => finish(readHealth(res.statusCode, res.headers['content-type'], Buffer.concat(parts).toString('utf8'))));
+        res.on('error', () => finish(null));
+      });
+      req.on('timeout', () => { req.destroy(); finish(null); });
+      req.on('error', () => finish(null));
+      req.end();
+    });
+    if (got) return {path, version: got.version};
+  }
+  return null;
+}
+
 // Read a response body but stop (and cancel the download) the moment it passes the limit.
 async function readCapped(r, limit) {
   if (!r.body) return '';
@@ -426,7 +496,7 @@ async function gatherEvidence(full, token, f = fetch, deadline = AbortSignal.tim
   const ev = {full_name: clean(meta.full_name ?? full, 140), url: /^https:\/\/github\.com\//.test(meta.html_url ?? '') ? meta.html_url : null, private: !!meta.private,
     access: perm.admin ? 'admin' : perm.push ? 'write' : 'read', fork: !!meta.fork, archived: !!meta.archived, empty: meta.size === 0,
     pushedAt: meta.pushed_at ?? null, branch: meta.default_branch ?? null, seen: false, truncated: false, secretFiles: [],
-    has: {health: false, backup: false, monitor: false}, packages: [], runs: [], deployments: []};
+    has: {health: false, backup: false, monitor: false, invite: false, signupPage: false}, packages: [], runs: [], deployments: []};
   // Running inside this repo's own GitHub Actions: the workflow token never reports permissions, but only someone
   // who controls the repo can make a workflow run there. Confirm with GitHub that this run is real and still going.
   const runId = process.env.GITHUB_RUN_ID ?? '';
@@ -441,7 +511,7 @@ async function gatherEvidence(full, token, f = fetch, deadline = AbortSignal.tim
   if (t.status === 200) { tree = (t.json?.tree ?? []).filter(x => x.type === 'blob').map(x => String(x.path)); ev.truncated = !!t.json?.truncated; ev.seen = true; }
   else if (t.status === 409) { ev.empty = true; ev.seen = true; }
   ev.secretFiles = tree.filter(isSecretFile).slice(0, 5).map(p => clean(p, 200));
-  ev.has = {health: tree.some(p => HEALTH.test(p)), backup: tree.some(p => BACKUP.test(p)), monitor: tree.some(p => MONITOR.test(p))};
+  ev.has = {health: tree.some(p => HEALTH.test(p)), backup: tree.some(p => BACKUP.test(p)), monitor: tree.some(p => MONITOR.test(p)), invite: tree.some(inviteFile), signupPage: tree.some(p => SIGNUP_PAGE.test(p) && !/(^|\/)(node_modules|vendor)\//.test(p))};
   const pk = new Set();
   for (const p of tree.filter(p => MANIFEST.test(p) && !/(^|\/)(node_modules|vendor|\.venv|venv)\//.test(p)).slice(0, 12)) {
     const r = await get(`${base}/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(ev.branch)}`);
@@ -453,8 +523,9 @@ async function gatherEvidence(full, token, f = fetch, deadline = AbortSignal.tim
     const key = r.path ?? r.name; if (seenWf.has(key) || ['cancelled', 'skipped'].includes(r.conclusion)) continue; seenWf.add(key);
     if (ev.runs.length < 20) ev.runs.push({name: clean(r.name, 100), path: clean(r.path, 200), conclusion: clean(r.conclusion, 20), at: r.updated_at});
   }
-  const deps = await get(`${base}/deployments?per_page=5`);
-  for (const d of (Array.isArray(deps.json) ? deps.json : []).slice(0, 5)) {
+  const deps = await get(`${base}/deployments?per_page=10`);
+  if (deps.status === 401 || deps.status === 403) ev.deploysUnread = true;   // this login can't read deploy records
+  for (const d of (Array.isArray(deps.json) ? deps.json : []).slice(0, 10)) {
     const s = (await get(`${base}/deployments/${Number(d.id)}/statuses?per_page=1`)).json?.[0];
     ev.deployments.push({environment: clean(d.environment, 60), at: s?.created_at ?? d.created_at, state: s?.state ?? null,
       url: /^https:\/\/[^\s]+$/.test(s?.environment_url ?? '') ? clean(s.environment_url, 200) : null});
@@ -467,7 +538,7 @@ const MARK = {verified: '✓ CHECKED    ', selftested: '✓ OWN TEST   ', claime
 function report(p, full) {
   const real = p.blocks.filter(b => !b.ghost), built = real.filter(b => b.state === 'verified').length, ownTests = real.filter(b => b.state === 'selftested').length, next = frontier(p.blocks)[0];
   const blocks = real.map(b => {
-    const key = String(b.id).split('-').pop(), L = lessons[`app-${key}`];
+    const key = String(b.id).split('-').pop(), L = lessons[b.lesson] ?? lessons[`app-${key}`];
     const found = String(b.purpose ?? '').replace('You connected this repo through GitHub, but you can only read it, not change it', 'Your GitHub login can only read this repo, not change it (run with your own token to prove it is yours)')
       .replace('You connected this repo through GitHub and can change it', 'Your GitHub login can change this repo');
     const selfReported = b.state === 'selftested';
@@ -480,7 +551,9 @@ function report(p, full) {
 }
 
 function asText(r) {
-  const lines = [`GIZA CHECK · ${r.repo} · ${r.checked}`, `${r.built} of ${r.total} built (checked by Giza from evidence, not from what anyone says)` + (r.ownTests ? ` · ${r.ownTests} more passed the project's own tests` : ''), ''];
+  const n = st => r.blocks.filter(b => st.includes(b.state)).length, says = n(['claimed', 'building']), bad = n(['broken', 'blocked']), todo = n(['planned', 'unknown', 'waiting']);
+  const lines = [`GIZA CHECK · ${r.repo} · ${r.checked}`, `${r.built} proven (checked by Giza itself from evidence, not from what anyone says)`
+    + [r.ownTests && `${r.ownTests} passed the project's own tests`, says && `${says} your AI says so`, bad && `${bad} ${bad === 1 ? 'problem' : 'problems'}`, todo && `${todo} not started`].filter(Boolean).map(x => ` · ${x}`).join(''), ''];
   for (const b of r.blocks) lines.push(`${MARK[b.state] ?? b.state.toUpperCase()}  ${b.name}`, `               Found: ${b.found}`);
   if (r.ownTests) lines.push('', 'OWN TEST = a test your project wrote itself passed. Giza can\'t see what it tests, so it doesn\'t count as built. Make sure it really does what its name says.');
   lines.push('', r.next ? `DO THIS NEXT: ${r.next.name}. ${r.next.why}` : 'Nothing waiting: every block is proven.',
@@ -501,10 +574,15 @@ async function main(argv = process.argv.slice(2), out = console.log, f = fetch, 
   if (!target) { out('Usage: node giza-check.mjs owner/repo [--json] [--strict]\nExample: node giza-check.mjs octocat/hello-world'); return 1; }
   try {
     const ev = await gatherEvidence(target, await token(), f);
-    const prod = ev.deployments.find(d => /prod|github-pages/i.test(d.environment) && d.url), site = prod ? safeSite(prod.url) : null;
+    const prod = pickProd(ev.deployments), site = prod ? safeSite(prod.url) : null;
     // No safe address, or no answer: the live block can't turn green (Giza never assumes).
     const siteAnswers = prod ? (site ? await (opts.probe ?? probeSite)(site) : false) : null;
+    if (siteAnswers === true) ev.health = await (opts.health ?? fetchHealth)(site).catch(() => null);
     const p = evaluateConnected(ev, {id: 'check', checkedAt: new Date().toISOString(), user: null, siteAnswers});
+    if (ev.deploysUnread && !prod) for (const k of ['live', 'looks']) {
+      const b = p.blocks.find(x => x.id === `check-${k}`);
+      if (b && b.state !== 'verified') b.purpose = "Not checked: this GitHub login isn't allowed to read the project's deploy records, so Giza couldn't find its web address. Run with a login that can, or connect the repo on the Giza page.";
+    }
     const master = p.blocks.find(b => b.id === 'check-master');
     if (ev.inOwnActions && master) master.purpose = master.purpose.replace('You connected this repo through GitHub and can change it', 'Checked from inside this repo\'s own GitHub Actions run, which only its owners can start');
     const r = report(p, ev.full_name);
@@ -527,4 +605,5 @@ async function run() {
   process.exitCode = await main();
 }
 if (process.argv[1] && /check(-cli)?\.mjs$/.test(process.argv[1])) run();
+
 export {main, gatherEvidence, report};

@@ -6,7 +6,7 @@ Giza looks at a project on GitHub and scores it against the nine things a real a
 
 ```
 GIZA CHECK · you/your-app · 2026-11-05
-1 of 9 built (checked by Giza from evidence, not from what anyone says) · 2 more passed the project's own tests
+1 proven (checked by Giza itself from evidence, not from what anyone says) · 1 passed the project's own tests · 1 your AI says so · 6 not started
 
 ✓ CHECKED      One safe copy of your code
 · NOT CHECKED  People can reach it
@@ -38,6 +38,14 @@ jobs:
 The pyramid appears in the run's summary every time you push. Add `with: { strict: "true" }` to fail the run whenever Giza finds a problem (✗ PROBLEM), such as a committed `.env` file.
 
 **2. Let your AI check its own work** (Claude, ChatGPT, or any coding AI that can run commands)
+
+Easiest: add Giza as a skill, so your AI checks before it ever says "done":
+
+```bash
+npx skills add giza-buildwatch/giza-check
+```
+
+That works with Claude Code, Cursor, Codex and the other agents the `skills` tool supports. Or paste this to your AI:
 
 Paste this to your AI:
 

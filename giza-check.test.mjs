@@ -121,3 +121,10 @@ test('a different repo than the one running the workflow gets no Actions credit'
     assert.notEqual(JSON.parse(out).blocks.find(b => b.key === 'master').state, 'verified');
   } finally { for (const k of Object.keys(env)) delete process.env[k]; }
 });
+
+test('the copy shipped inside the agent skill is the same file as giza-check.mjs', async () => {
+  const {readFileSync} = await import('node:fs');
+  const root = readFileSync(new URL('./giza-check.mjs', import.meta.url), 'utf8');
+  const skill = readFileSync(new URL('./skills/giza-check/scripts/giza-check.mjs', import.meta.url), 'utf8');
+  assert.equal(skill, root, 'run: cp giza-check.mjs skills/giza-check/scripts/giza-check.mjs');
+});
